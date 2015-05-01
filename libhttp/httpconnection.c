@@ -284,6 +284,14 @@ static void httpDestroyHeaders(void *arg ATTR_UNUSED, char *key, char *value) {
 }
 
 static char *getPeerName(int fd, int *port, int numericHosts) {
+  /* XXX inet_ntop fails here, except when running in debug mode ! 
+  as workaround we return immediatly. I don't think this is really needed.
+  */
+  char xhost[256] = "unknown\0";
+  char *xret;
+  check(xret         = strdup(xhost));
+  return xret;
+
   struct sockaddr peerAddr;
   socklen_t sockLen = sizeof(peerAddr);
   if (getpeername(fd, &peerAddr, &sockLen)) {
