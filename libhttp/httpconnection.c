@@ -825,8 +825,17 @@ static int httpHandleCommand(struct HttpConnection *http,
   const char *host                           = getFromHashMap(&http->header,
                                                               "host");
   if (host) {
+    int within_brackets = 0; // For IPv6 hosts
     for (char ch, *ptr = (char *)host; (ch = *ptr) != '\000'; ptr++) {
-      if (ch == ':') {
+      if (ch == '[') {
+          within_brackets = 1;
+          break;
+      }
+      if (ch == ']') {
+          within_brackets = 0;
+          break;
+      }
+      if (!within_brackets && ch == ':') {
         *ptr                                 = '\000';
         break;
       }
