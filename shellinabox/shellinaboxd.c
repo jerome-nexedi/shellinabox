@@ -104,6 +104,8 @@ static int            port;
 static int            portMin;
 static int            portMax;
 static int            localhostOnly = 0;
+static char           *socket_path;
+static char           *host;
 static int            noBeep        = 0;
 static int            numericHosts  = 0;
 static int            enableSSL     = 1;
@@ -765,6 +767,8 @@ static void usage(void) {
           "  -h, --help                  print this message\n"
           "      --linkify=[none|normal|agressive] default is \"normal\"\n"
           "      --localhost-only        only listen on 127.0.0.1\n"
+          "      --socket-path           path to AF_UNIX socket to bind to\n"
+          "      --host                  only listen on this address (not implemented)\n"
           "      --no-beep               suppress all audio output\n"
           "  -n, --numeric               do not resolve hostnames\n"
           "      --pidfile=PIDFILE       publish pid of daemon process\n"
@@ -868,6 +872,8 @@ static void parseArgs(int argc, char * const argv[]) {
       { "group",            1, 0, 'g' },
       { "linkify",          1, 0,  0  },
       { "localhost-only",   0, 0,  0  },
+      { "socket-path",      1, 0,  0  },
+      { "host",             1, 0,  0  },
       { "no-beep",          0, 0,  0  },
       { "numeric",          0, 0, 'n' },
       { "pidfile",          1, 0,  0  },
@@ -1035,6 +1041,12 @@ static void parseArgs(int argc, char * const argv[]) {
     } else if (!idx--) {
       // Localhost Only
       localhostOnly        = 1;
+    } else if (!idx--) {
+      // Socket path
+      socket_path = optarg;
+    } else if (!idx--) {
+      // Host
+      fatal("not implemented");
     } else if (!idx--) {
       // No Beep
       noBeep               = 1;
@@ -1239,6 +1251,7 @@ int main(int argc, char * const argv[]) {
   // Parse command line arguments
   parseArgs(argc, argv);
 
+
   // Fork the launcher process, allowing us to drop privileges in the main
   // process.
   int launcherFd  = forkLauncher();
@@ -1249,7 +1262,7 @@ int main(int argc, char * const argv[]) {
   // Create a new web server
   Server *server;
   if (port) {
-    check(server  = newServer(localhostOnly, port));
+    check(server  = newServer(socket_path, host, port));
     dropPrivileges();
     setUpSSL(server);
   } else {
@@ -1269,7 +1282,7 @@ int main(int argc, char * const argv[]) {
       _exit(0);
     }
     check(!NOINTR(close(fds[0])));
-    check(server  = newCGIServer(localhostOnly, portMin, portMax,
+    check(server  = newCGIServer(socket_path, host, portMin, portMax,
                                  AJAX_TIMEOUT));
     cgiServer     = server;
     setUpSSL(server);

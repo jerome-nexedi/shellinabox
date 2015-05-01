@@ -72,8 +72,8 @@ typedef struct ServerConnection ServerConnection;
 typedef struct Server Server;
 typedef struct URL URL;
 
-Server *newCGIServer(int localhostOnly, int portMin, int portMax, int timeout);
-Server *newServer(int localhostOnly, int port);
+Server *newCGIServer(char *socket_path, char *host, int portMin, int portMax, int timeout);
+Server *newServer(char *socket_path, char *host, int port);
 void deleteServer(Server *server);
 int  serverGetListeningPort(Server *server);
 int  serverGetFd(Server *server);

@@ -78,10 +78,10 @@ struct Server {
   struct SSLSupport       ssl;
 };
 
-struct Server *newCGIServer(int localhostOnly, int portMin, int portMax,
+struct Server *newCGIServer(char *socket, char *host, int portMin, int portMax,
                             int timeout);
-struct Server *newServer(int localhostOnly, int port);
-void initServer(struct Server *server, int localhostOnly, int portMin,
+struct Server *newServer(char *socket, char *host, int port);
+void initServer(struct Server *server, char *socket, char *host, int portMin,
                 int portMax, int timeout);
 void destroyServer(struct Server *server);
 void deleteServer(struct Server *server);

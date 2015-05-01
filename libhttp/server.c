@@ -48,6 +48,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <sys/un.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -261,19 +262,19 @@ static int serverQuitHandler(struct HttpConnection *http ATTR_UNUSED,
   return HTTP_DONE;
 }
 
-struct Server *newCGIServer(int localhostOnly, int portMin, int portMax,
+struct Server *newCGIServer(char *socket_path, char *host, int portMin, int portMax,
                             int timeout) {
   struct Server *server;
   check(server = malloc(sizeof(struct Server)));
-  initServer(server, localhostOnly, portMin, portMax, timeout);
+  initServer(server, socket_path, host, portMin, portMax, timeout);
   return server;
 }
 
-struct Server *newServer(int localhostOnly, int port) {
-  return newCGIServer(localhostOnly, port, port, -1);
+struct Server *newServer(char *socket_path, char *host, int port) {
+  return newCGIServer(socket_path, host, port, port, -1);
 }
 
-void initServer(struct Server *server, int localhostOnly, int portMin,
+void initServer(struct Server *server, char *socket_path, char *host, int portMin,
                 int portMax, int timeout) {
   server->looping               = 0;
   server->exitAll               = 0;
@@ -283,47 +284,73 @@ void initServer(struct Server *server, int localhostOnly, int portMin,
   server->numConnections        = 0;
 
   int true                      = 1;
-  server->serverFd              = socket(PF_INET, SOCK_STREAM, 0);
-  check(server->serverFd >= 0);
-  check(!setsockopt(server->serverFd, SOL_SOCKET, SO_REUSEADDR,
-                    &true, sizeof(true)));
-  struct sockaddr_in serverAddr = { 0 };
-  serverAddr.sin_family         = AF_INET;
-  serverAddr.sin_addr.s_addr    = htonl(localhostOnly
-                                        ? INADDR_LOOPBACK : INADDR_ANY);
 
-  // Linux unlike BSD does not have support for picking a local port range.
-  // So, we have to randomly pick a port from our allowed port range, and then
-  // keep iterating until we find an unused port.
-  if (portMin || portMax) {
-    struct timeval tv;
-    check(!gettimeofday(&tv, NULL));
-    srand((int)(tv.tv_usec ^ tv.tv_sec));
-    check(portMin > 0);
-    check(portMax < 65536);
-    check(portMax >= portMin);
-    int portStart               = rand() % (portMax - portMin + 1) + portMin;
-    for (int p = 0; p <= portMax-portMin; p++) {
-      int port                  = (p+portStart)%(portMax-portMin+1)+ portMin;
-      serverAddr.sin_port       = htons(port);
-      if (!bind(server->serverFd, (struct sockaddr *)&serverAddr,
-                sizeof(serverAddr))) {
-        break;
+  if (socket_path) {
+    struct sockaddr_un server_address;
+
+   // check(unlink(socket_path));
+    unlink(socket_path);
+
+    server->serverFd = socket(AF_UNIX, SOCK_STREAM, 0);
+    check(server->serverFd >= 0);
+
+    server_address.sun_family = AF_UNIX;
+    strcpy(server_address.sun_path, socket_path);
+    bind(server->serverFd, (struct sockaddr*)&server_address, sizeof(server_address));
+
+
+    check(!listen(server->serverFd, SOMAXCONN));
+
+  } else {
+      // AF_INET or AF_INET6 ?
+    server->serverFd              = socket(PF_INET, SOCK_STREAM, 0);
+    check(server->serverFd >= 0);
+    check(!setsockopt(server->serverFd, SOL_SOCKET, SO_REUSEADDR,
+                      &true, sizeof(true)));
+
+
+    struct sockaddr_in serverAddr = { 0 };
+    serverAddr.sin_family         = AF_INET;
+    
+
+    serverAddr.sin_addr.s_addr    = htonl(INADDR_ANY);
+    if (host != NULL) {
+      inet_aton(host, serverAddr.sin_addr.s_addr);
+    }
+
+    // Linux unlike BSD does not have support for picking a local port range.
+    // So, we have to randomly pick a port from our allowed port range, and then
+    // keep iterating until we find an unused port.
+    if (portMin || portMax) {
+      struct timeval tv;
+      check(!gettimeofday(&tv, NULL));
+      srand((int)(tv.tv_usec ^ tv.tv_sec));
+      check(portMin > 0);
+      check(portMax < 65536);
+      check(portMax >= portMin);
+      int portStart               = rand() % (portMax - portMin + 1) + portMin;
+      for (int p = 0; p <= portMax-portMin; p++) {
+        int port                  = (p+portStart)%(portMax-portMin+1)+ portMin;
+        serverAddr.sin_port       = htons(port);
+        if (!bind(server->serverFd, (struct sockaddr *)&serverAddr,
+                  sizeof(serverAddr))) {
+          break;
+        }
+        serverAddr.sin_port       = 0;
       }
-      serverAddr.sin_port       = 0;
+      if (!serverAddr.sin_port) {
+        fatal("Failed to find any available port");
+      }
     }
-    if (!serverAddr.sin_port) {
-      fatal("Failed to find any available port");
-    }
+    check(!listen(server->serverFd, SOMAXCONN));
+    socklen_t socklen             = (socklen_t)sizeof(serverAddr);
+    check(!getsockname(server->serverFd, (struct sockaddr *)&serverAddr,
+                       &socklen));
+    check(socklen == sizeof(serverAddr));
+    server->port                  = ntohs(serverAddr.sin_port);
+    info("Listening on port %d", server->port);
   }
 
-  check(!listen(server->serverFd, SOMAXCONN));
-  socklen_t socklen             = (socklen_t)sizeof(serverAddr);
-  check(!getsockname(server->serverFd, (struct sockaddr *)&serverAddr,
-                     &socklen));
-  check(socklen == sizeof(serverAddr));
-  server->port                  = ntohs(serverAddr.sin_port);
-  info("Listening on port %d", server->port);
 
   check(server->pollFds         = malloc(sizeof(struct pollfd)));
   server->pollFds->fd           = server->serverFd;
@@ -543,11 +570,21 @@ void serverLoop(struct Server *server) {
     if (eventCount > 0 && server->pollFds[0].revents) {
       eventCount--;
       if (server->pollFds[0].revents && POLLIN) {
-        struct sockaddr_in clientAddr;
-        socklen_t sockLen                 = sizeof(clientAddr);
-        int clientFd                      = accept(
-                   server->serverFd, (struct sockaddr *)&clientAddr, &sockLen);
+        int clientFd = -1;
+        if (0) {
+          struct sockaddr_in clientAddr;
+          socklen_t sockLen                 = sizeof(clientAddr);
+          clientFd                      = accept(
+                     server->serverFd, (struct sockaddr *)&clientAddr, &sockLen);
+        } else {
+          struct sockaddr_un clientAddr;
+          int sockLen                 = sizeof(clientAddr);
+          clientFd                      = accept(
+                     server->serverFd, (struct sockaddr *)&clientAddr, &sockLen);
+        }
+
         dcheck(clientFd >= 0);
+
         if (clientFd >= 0) {
           check(!fcntl(clientFd, F_SETFL, O_RDWR | O_NONBLOCK));
           struct HttpConnection *http;
